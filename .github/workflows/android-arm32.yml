@@ -1,117 +1,127 @@
-name: Kodi Omega ARM32 Stable
+name: Build Kodi Android (armeabi-v7a)
 
 on:
   push:
-    branches: [ fork ]
-  workflow_dispatch:
+    branches:
+      - master
+      - Omega
 
-concurrency:
-  group: kodi-arm32-omega-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: write
+
+env:
+  ANDROID_API: "21"
+  ANDROID_ABI: "armeabi-v7a"
+  NDK_VERSION: "25.2.9519653"
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+  build-android:
+    runs-on: ubuntu-22.04
 
-    env:
-      ANDROID_HOME: /home/runner/android-sdk
-      ANDROID_NDK_VERSION: 26.3.11579264
-      HOST: arm-linux-androideabi
-      TAR_DIR: $HOME/xbmc-tarballs
-      PREFIX: $HOME/xbmc-depends
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ['master', 'Omega']
 
     steps:
-      - name: Checkout Kodi Omega
+      # ─────────────────────────────
+      # CHECKOUT
+      # ─────────────────────────────
+      - name: Checkout Kodi
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          repository: xbmc/xbmc
+          ref: ${{ matrix.branch }}
+          path: kodi-source
+          fetch-depth: 1
 
-      - name: Install dependencies
+      # ─────────────────────────────
+      # DEPENDENCIES
+      # ─────────────────────────────
+      - name: Install tools
         run: |
           sudo apt update
           sudo apt install -y \
-            build-essential git curl unzip zip \
-            autoconf bison flex gawk gperf \
-            cmake ninja-build python3 default-jdk
+            git curl unzip zip build-essential \
+            openjdk-17-jdk python3 cmake ninja-build
 
-      - name: Install Android SDK
+      # ─────────────────────────────
+      # ANDROID SDK + NDK
+      # ─────────────────────────────
+      - name: Setup Android SDK/NDK
         run: |
-          mkdir -p $ANDROID_HOME
-          cd $ANDROID_HOME
+          mkdir -p $HOME/android-sdk
+          cd $HOME/android-sdk
 
-          curl -L -o cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip cmdline.zip -d cmdline-tools
-          mv cmdline-tools/cmdline-tools cmdline-tools/latest
+          curl -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux.zip
+          unzip -q cmdline-tools.zip
 
-      - name: Install SDK/NDK
-        run: |
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/* cmdline-tools/latest/ || true
 
-          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
+          export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
 
-          sdkmanager --sdk_root=$ANDROID_HOME \
+          yes | sdkmanager --licenses
+
+          sdkmanager \
             "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "ndk;${ANDROID_NDK_VERSION}" \
-            "cmake;3.22.1"
+            "platforms;android-${ANDROID_API}" \
+            "ndk;${NDK_VERSION}"
 
-      - name: Set environment paths
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_NDK=$HOME/android-sdk/ndk/${NDK_VERSION}" >> $GITHUB_ENV
+
+      # ─────────────────────────────
+      # DEPENDS (Kodi native deps)
+      # ─────────────────────────────
+      - name: Build depends (Android armeabi-v7a)
         run: |
-          echo "ANDROID_NDK=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          cd kodi-source/tools/depends
 
-      - name: Cache tarballs
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.TAR_DIR }}
-          key: kodi-tarballs-omega-arm32
-
-      - name: Cache depends
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.PREFIX }}
-          key: kodi-depends-omega-arm32
-
-      - name: Bootstrap depends
-        run: |
-          cd tools/depends
           ./bootstrap
 
-      - name: Configure depends ARM32
-        run: |
-          cd tools/depends
-
           ./configure \
-            --host=${HOST} \
+            --host=arm-linux-androideabi \
             --with-sdk-path=$ANDROID_HOME \
-            --with-ndk-path=$ANDROID_NDK \
-            --prefix=$PREFIX \
-            --with-tarballs=$TAR_DIR
+            --with-ndk-path=$ANDROID_NDK
 
-      - name: Build dependencies
-        run: |
-          cd tools/depends
           make -j$(nproc)
 
-      - name: Generate build system
+      # ─────────────────────────────
+      # CMAKE CONFIG
+      # ─────────────────────────────
+      - name: Configure Kodi
         run: |
-          make -C tools/depends/target/cmakebuildsys BUILD_DIR=$HOME/kodi-build
+          mkdir -p build
 
-      - name: Build Kodi
-        run: |
-          cd $HOME/kodi-build
-          make -j$(nproc)
+          cmake -S kodi-source -B build \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${ANDROID_ABI} \
+            -DANDROID_PLATFORM=${ANDROID_API} \
+            -DAPP_RENDER_SYSTEM=gles \
+            -DCMAKE_BUILD_TYPE=Release
 
+      # ─────────────────────────────
+      # BUILD
+      # ─────────────────────────────
       - name: Build APK
         run: |
-          cd $GITHUB_WORKSPACE
-          make apk
+          cmake --build build -j$(nproc)
 
+      # ─────────────────────────────
+      # COLLECT OUTPUT
+      # ─────────────────────────────
+      - name: Collect APK
+        run: |
+          mkdir -p output
+          find build -name "*.apk" -exec cp {} output/ \; || true
+          ls -R output
+
+      # ─────────────────────────────
+      # UPLOAD ARTIFACT
+      # ─────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: kodi-omega-arm32-stable
-          path: "**/*.apk"
+          name: kodi-android-armeabi-v7a
+          path: output/*.apk
