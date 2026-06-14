@@ -3,8 +3,7 @@ name: Build Kodi Android (armeabi-v7a)
 on:
   push:
     branches:
-      - master
-      - Omega
+      - fork
 
 permissions:
   contents: write
