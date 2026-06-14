@@ -17,11 +17,6 @@ jobs:
   build-android:
     runs-on: ubuntu-22.04
 
-    strategy:
-      fail-fast: false
-      matrix:
-        branch: ['master', 'Omega']
-
     steps:
       # ─────────────────────────────
       # CHECKOUT
@@ -30,12 +25,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xbmc/xbmc
-          ref: ${{ matrix.branch }}
+          ref: fork
           path: kodi-source
           fetch-depth: 1
 
       # ─────────────────────────────
-      # DEPENDENCIES
+      # SYSTEM DEPENDENCIES
       # ─────────────────────────────
       - name: Install tools
         run: |
@@ -45,23 +40,31 @@ jobs:
             openjdk-17-jdk python3 cmake ninja-build
 
       # ─────────────────────────────
-      # ANDROID SDK + NDK
+      # ANDROID SDK + NDK (FIXED)
       # ─────────────────────────────
       - name: Setup Android SDK/NDK
         run: |
+          set -e
+
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
 
-          curl -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux.zip
-          unzip -q cmdline-tools.zip
+          # CMDLINE TOOLS (CORRECT ZIP)
+          curl -L --fail -o cmdline-tools.zip \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+
+          mkdir -p cmdline-tools
+          unzip -q cmdline-tools.zip -d cmdline-tools
 
           mkdir -p cmdline-tools/latest
-          mv cmdline-tools/* cmdline-tools/latest/ || true
+          mv cmdline-tools/cmdline-tools/* cmdline-tools/latest/
 
           export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
 
+          # ACCEPT LICENSES
           yes | sdkmanager --licenses
 
+          # INSTALL SDK COMPONENTS
           sdkmanager \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
@@ -71,9 +74,9 @@ jobs:
           echo "ANDROID_NDK=$HOME/android-sdk/ndk/${NDK_VERSION}" >> $GITHUB_ENV
 
       # ─────────────────────────────
-      # DEPENDS (Kodi native deps)
+      # KODI DEPENDS
       # ─────────────────────────────
-      - name: Build depends (Android armeabi-v7a)
+      - name: Build depends (Android)
         run: |
           cd kodi-source/tools/depends
 
@@ -103,12 +106,12 @@ jobs:
       # ─────────────────────────────
       # BUILD
       # ─────────────────────────────
-      - name: Build APK
+      - name: Build
         run: |
           cmake --build build -j$(nproc)
 
       # ─────────────────────────────
-      # COLLECT OUTPUT
+      # COLLECT APK
       # ─────────────────────────────
       - name: Collect APK
         run: |
@@ -117,7 +120,7 @@ jobs:
           ls -R output
 
       # ─────────────────────────────
-      # UPLOAD ARTIFACT
+      # ARTIFACT
       # ─────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
