@@ -24,7 +24,7 @@ jobs:
       - name: Checkout Kodi
         uses: actions/checkout@v4
         with:
-          repository: xbmc/xbmc
+          repository: beeblebroxian/kodi
           ref: fork
           path: kodi-source
           fetch-depth: 1
