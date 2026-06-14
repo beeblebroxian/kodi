@@ -1,0 +1,117 @@
+name: Kodi Omega ARM32 Stable
+
+on:
+  push:
+    branches: [ fork ]
+  workflow_dispatch:
+
+concurrency:
+  group: kodi-arm32-omega-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      ANDROID_HOME: /home/runner/android-sdk
+      ANDROID_NDK_VERSION: 26.3.11579264
+      HOST: arm-linux-androideabi
+      TAR_DIR: $HOME/xbmc-tarballs
+      PREFIX: $HOME/xbmc-depends
+
+    steps:
+      - name: Checkout Kodi Omega
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential git curl unzip zip \
+            autoconf bison flex gawk gperf \
+            cmake ninja-build python3 default-jdk
+
+      - name: Install Android SDK
+        run: |
+          mkdir -p $ANDROID_HOME
+          cd $ANDROID_HOME
+
+          curl -L -o cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip cmdline.zip -d cmdline-tools
+          mv cmdline-tools/cmdline-tools cmdline-tools/latest
+
+      - name: Install SDK/NDK
+        run: |
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+
+          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
+
+          sdkmanager --sdk_root=$ANDROID_HOME \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;${ANDROID_NDK_VERSION}" \
+            "cmake;3.22.1"
+
+      - name: Set environment paths
+        run: |
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      - name: Cache tarballs
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TAR_DIR }}
+          key: kodi-tarballs-omega-arm32
+
+      - name: Cache depends
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PREFIX }}
+          key: kodi-depends-omega-arm32
+
+      - name: Bootstrap depends
+        run: |
+          cd tools/depends
+          ./bootstrap
+
+      - name: Configure depends ARM32
+        run: |
+          cd tools/depends
+
+          ./configure \
+            --host=${HOST} \
+            --with-sdk-path=$ANDROID_HOME \
+            --with-ndk-path=$ANDROID_NDK \
+            --prefix=$PREFIX \
+            --with-tarballs=$TAR_DIR
+
+      - name: Build dependencies
+        run: |
+          cd tools/depends
+          make -j$(nproc)
+
+      - name: Generate build system
+        run: |
+          make -C tools/depends/target/cmakebuildsys BUILD_DIR=$HOME/kodi-build
+
+      - name: Build Kodi
+        run: |
+          cd $HOME/kodi-build
+          make -j$(nproc)
+
+      - name: Build APK
+        run: |
+          cd $GITHUB_WORKSPACE
+          make apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-omega-arm32-stable
+          path: "**/*.apk"
